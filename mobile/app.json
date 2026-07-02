@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Patungin",
+    "slug": "patungin",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "scheme": "patungin",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.patungin"
+    },
+    "android": {
+      "package": "app.patungin",
+      "adaptiveIcon": {
+        "backgroundColor": "#0F1B2D",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-status-bar",
+      "expo-sqlite",
+      "expo-secure-store",
+      "expo-font",
+      "expo-camera",
+      "expo-image-picker",
+      "expo-splash-screen"
+    ]
+  }
+}
