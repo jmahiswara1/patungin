@@ -6,6 +6,7 @@ import {
   FlatList,
   Pressable,
   RefreshControl,
+  Share as RNShare,
 } from "react-native";
 import { router, useLocalSearchParams, useFocusEffect } from "expo-router";
 import Animated, {
@@ -33,6 +34,15 @@ export default function GroupDetailScreen() {
   const { data: payments } = usePayments(id!);
 
   const [showInputSheet, setShowInputSheet] = React.useState(false);
+
+  const handleShare = async () => {
+    if (!group) return;
+    try {
+      await RNShare.share({
+        message: `Lihat tagihan "${group.name}" di Patungin:\nhttps://patungin.app/share/${group.share_code}`,
+      });
+    } catch {}
+  };
 
   const headerOpacity = useSharedValue(0);
   const headerY = useSharedValue(20);
@@ -101,6 +111,12 @@ export default function GroupDetailScreen() {
           <Card variant="outlined" style={styles.actionCard}>
             <CheckmarkDoodle width={20} height={20} color={colors.green} />
             <Text style={styles.actionText}>Bayar</Text>
+          </Card>
+        </Pressable>
+        <Pressable onPress={handleShare}>
+          <Card variant="outlined" style={styles.actionCard}>
+            <Text style={{ fontSize: 16 }}>📤</Text>
+            <Text style={styles.actionText}>Share</Text>
           </Card>
         </Pressable>
       </View>
