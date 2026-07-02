@@ -1,9 +1,12 @@
 import React, { useState } from "react";
-import { View, Text, StyleSheet, Pressable, ActivityIndicator } from "react-native";
+import { View, Text, StyleSheet, Pressable } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system";
 import { Button, Card } from "@/components/ui";
 import { UnderlineDoodle, FrameDoodle, ArrowDoodle } from "@/components/doodles";
-import { colors } from "@/lib/theme";
+import { colors, formatCurrency } from "@/lib/theme";
+import { scanReceipt, ParsedReceipt } from "@/lib/ai";
 import { useCreateReceipt, useCreateReceiptItem } from "@/hooks";
 
 export default function ScanReceiptScreen() {
@@ -12,50 +15,71 @@ export default function ScanReceiptScreen() {
   const createItem = useCreateReceiptItem();
 
   const [scanning, setScanning] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ParsedReceipt | null>(null);
+  const [error, setError] = useState("");
 
   const handleScan = async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      setError("Izin kamera diperlukan untuk scan struk");
+      return;
+    }
+
+    const pickerResult = await ImagePicker.launchCameraAsync({
+      quality: 0.8,
+      base64: false,
+    });
+
+    if (pickerResult.canceled || !pickerResult.assets[0]) return;
+
     setScanning(true);
-    // TODO: Phase 10 - AI integration
-    setTimeout(() => {
-      setScanning(false);
-      setResult({
-        items: [
-          { name: "Bakso Spesial", price: 25000, quantity: 2 },
-          { name: "Es Teh Manis", price: 5000, quantity: 4 },
-        ],
-        subtotal: 70000,
-        discount: 0,
-        shipping: 0,
-        total: 70000,
+    setError("");
+    setResult(null);
+
+    try {
+      const uri = pickerResult.assets[0].uri;
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
       });
-    }, 2000);
+
+      const parsed = await scanReceipt(base64);
+      setResult(parsed);
+    } catch (e: any) {
+      setError(e.message || "Gagal scan struk. Coba lagi atau input manual.");
+    } finally {
+      setScanning(false);
+    }
   };
 
   const handleSave = async () => {
     if (!result) return;
 
-    const receiptId = await createReceipt.mutateAsync({
-      group_id: groupId!,
-      source: "photo",
-      subtotal: result.subtotal,
-      discount: result.discount,
-      shipping: result.shipping,
-      total: result.total,
-      status: "draft",
-    });
-
-    for (const item of result.items) {
-      await createItem.mutateAsync({
-        receipt_id: receiptId,
-        name: item.name,
-        price: item.price,
-        quantity: item.quantity,
-        participants: [],
+    try {
+      const receiptId = await createReceipt.mutateAsync({
+        group_id: groupId!,
+        source: "photo",
+        subtotal: result.subtotal,
+        discount: result.discount,
+        shipping: result.shipping,
+        total: result.total,
+        platform: result.platform as any,
+        status: "draft",
       });
-    }
 
-    router.replace(`/group/${groupId}/receipt/edit?id=${receiptId}`);
+      for (const item of result.items) {
+        await createItem.mutateAsync({
+          receipt_id: receiptId,
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity,
+          participants: [],
+        });
+      }
+
+      router.replace(`/group/${groupId}/receipt/edit?id=${receiptId}`);
+    } catch (e) {
+      setError("Gagal menyimpan struk");
+    }
   };
 
   return (
@@ -77,8 +101,9 @@ export default function ScanReceiptScreen() {
             <FrameDoodle width={200} height={150} color={colors.blue} style={{ opacity: 0.5 }} />
             {scanning ? (
               <View style={styles.scanningOverlay}>
-                <ActivityIndicator size="large" color={colors.blue} />
-                <Text style={styles.scanningText}>Memindai struk...</Text>
+                <Text style={styles.scanningEmoji}>🔍</Text>
+                <Text style={styles.scanningText}>AI membaca struk...</Text>
+                <Text style={styles.scanningHint}>Tunggu sebentar ya</Text>
               </View>
             ) : (
               <View style={styles.placeholder}>
@@ -87,6 +112,12 @@ export default function ScanReceiptScreen() {
               </View>
             )}
           </View>
+
+          {error ? (
+            <Card variant="default" style={styles.errorCard}>
+              <Text style={styles.errorText}>{error}</Text>
+            </Card>
+          ) : null}
 
           <Button
             title={scanning ? "Memindai..." : "Foto Struk"}
@@ -99,39 +130,77 @@ export default function ScanReceiptScreen() {
           />
 
           <Text style={styles.hint}>
-            AI akan otomatis mendeteksi item dan harga dari struk
+            AI akan otomatis mendeteksi item, harga, diskon, dan ongkir dari struk
           </Text>
         </View>
       ) : (
         <View style={styles.resultArea}>
           <Card variant="elevated" style={styles.resultCard}>
-            <Text style={styles.resultTitle}>Hasil Scan</Text>
-            {result.items.map((item: any, i: number) => (
+            <View style={styles.resultHeader}>
+              <Text style={styles.resultTitle}>Hasil Scan</Text>
+              <Text style={styles.resultPlatform}>
+                {result.platform === "shopee" ? "🛒" : result.platform === "grabfood" ? "🍔" : "📋"}
+              </Text>
+            </View>
+
+            {result.items.map((item, i) => (
               <View key={i} style={styles.resultItem}>
-                <Text style={styles.resultItemName}>{item.name}</Text>
-                <Text style={styles.resultItemQty}>x{item.quantity}</Text>
+                <View style={styles.resultItemInfo}>
+                  <Text style={styles.resultItemName}>{item.name}</Text>
+                  <Text style={styles.resultItemQty}>x{item.quantity}</Text>
+                </View>
                 <Text style={styles.resultItemPrice}>
-                  Rp{(item.price * item.quantity).toLocaleString("id-ID")}
+                  {formatCurrency(item.price * item.quantity)}
                 </Text>
               </View>
             ))}
+
+            {result.discount > 0 && (
+              <View style={styles.resultRow}>
+                <Text style={styles.resultRowLabel}>Diskon</Text>
+                <Text style={styles.resultRowDiscount}>
+                  -{formatCurrency(result.discount)}
+                </Text>
+              </View>
+            )}
+
+            {result.shipping > 0 && (
+              <View style={styles.resultRow}>
+                <Text style={styles.resultRowLabel}>Ongkir</Text>
+                <Text style={styles.resultRowValue}>
+                  {formatCurrency(result.shipping)}
+                </Text>
+              </View>
+            )}
+
             <View style={styles.resultDivider} />
             <View style={styles.resultTotal}>
               <Text style={styles.resultTotalLabel}>Total</Text>
               <Text style={styles.resultTotalValue}>
-                Rp{result.total.toLocaleString("id-ID")}
+                {formatCurrency(result.total)}
               </Text>
             </View>
           </Card>
 
-          <Button
-            title="Simpan & Pilih Peserta"
-            onPress={handleSave}
-            variant="primary"
-            size="lg"
-            fullWidth
-            loading={createReceipt.isPending}
-          />
+          <View style={styles.resultActions}>
+            <Button
+              title="Scan Ulang"
+              onPress={() => {
+                setResult(null);
+                setError("");
+              }}
+              variant="secondary"
+              fullWidth
+            />
+            <Button
+              title="Simpan & Pilih Peserta"
+              onPress={handleSave}
+              variant="primary"
+              size="lg"
+              fullWidth
+              loading={createReceipt.isPending}
+            />
+          </View>
         </View>
       )}
     </View>
@@ -185,17 +254,25 @@ const styles = StyleSheet.create({
     height: 200,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 32,
+    marginBottom: 24,
   },
   scanningOverlay: {
     position: "absolute",
     alignItems: "center",
-    gap: 12,
+    gap: 8,
+  },
+  scanningEmoji: {
+    fontSize: 36,
   },
   scanningText: {
     fontFamily: "Caveat-SemiBold",
-    fontSize: 18,
+    fontSize: 20,
     color: colors.blue,
+  },
+  scanningHint: {
+    fontFamily: "Caveat-Regular",
+    fontSize: 14,
+    color: colors.inkFaint,
   },
   placeholder: {
     position: "absolute",
@@ -206,6 +283,17 @@ const styles = StyleSheet.create({
     fontFamily: "Caveat-Regular",
     fontSize: 16,
     color: colors.inkFaint,
+  },
+  errorCard: {
+    marginBottom: 16,
+    backgroundColor: "#fee2e2",
+    borderColor: "#fecaca",
+  },
+  errorText: {
+    fontFamily: "Caveat-Regular",
+    fontSize: 16,
+    color: "#991b1b",
+    textAlign: "center",
   },
   hint: {
     fontFamily: "Caveat-Regular",
@@ -221,35 +309,69 @@ const styles = StyleSheet.create({
     paddingTop: 20,
   },
   resultCard: {
-    marginBottom: 24,
+    marginBottom: 20,
+  },
+  resultHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
   },
   resultTitle: {
     fontFamily: "Caveat-Bold",
     fontSize: 22,
     color: colors.ink,
-    marginBottom: 12,
+  },
+  resultPlatform: {
+    fontSize: 24,
   },
   resultItem: {
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
     paddingVertical: 8,
   },
-  resultItemName: {
+  resultItemInfo: {
     flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  resultItemName: {
     fontFamily: "Caveat-SemiBold",
     fontSize: 18,
     color: colors.ink,
   },
   resultItemQty: {
     fontFamily: "Caveat-Regular",
-    fontSize: 16,
+    fontSize: 15,
     color: colors.inkFaint,
-    marginRight: 12,
   },
   resultItemPrice: {
     fontFamily: "Caveat-SemiBold",
     fontSize: 18,
     color: colors.ink,
+  },
+  resultRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 4,
+  },
+  resultRowLabel: {
+    fontFamily: "Caveat-Regular",
+    fontSize: 16,
+    color: colors.inkMuted,
+  },
+  resultRowValue: {
+    fontFamily: "Caveat-SemiBold",
+    fontSize: 16,
+    color: colors.ink,
+  },
+  resultRowDiscount: {
+    fontFamily: "Caveat-SemiBold",
+    fontSize: 16,
+    color: colors.green,
   },
   resultDivider: {
     height: 1.5,
@@ -270,5 +392,8 @@ const styles = StyleSheet.create({
     fontFamily: "Caveat-Bold",
     fontSize: 24,
     color: colors.blue,
+  },
+  resultActions: {
+    gap: 10,
   },
 });

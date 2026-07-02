@@ -2,9 +2,11 @@ import React, { useState } from "react";
 import { View, Text, StyleSheet, Image, Pressable } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
-import { Button, Card } from "@/components/ui";
-import { UnderlineDoodle, FrameDoodle, ArrowDoodle } from "@/components/doodles";
-import { colors } from "@/lib/theme";
+import * as FileSystem from "expo-file-system";
+import { Button, Card, Badge } from "@/components/ui";
+import { UnderlineDoodle, FrameDoodle } from "@/components/doodles";
+import { colors, formatCurrency } from "@/lib/theme";
+import { scanReceipt, ParsedReceipt } from "@/lib/ai";
 import { useCreateReceipt, useCreateReceiptItem } from "@/hooks";
 
 export default function ScreenshotReceiptScreen() {
@@ -14,7 +16,8 @@ export default function ScreenshotReceiptScreen() {
 
   const [image, setImage] = useState<string | null>(null);
   const [parsing, setParsing] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ParsedReceipt | null>(null);
+  const [error, setError] = useState("");
 
   const pickImage = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -26,56 +29,58 @@ export default function ScreenshotReceiptScreen() {
     });
 
     if (!pickerResult.canceled && pickerResult.assets[0]) {
-      setImage(pickerResult.assets[0].uri);
-      parseScreenshot();
+      const uri = pickerResult.assets[0].uri;
+      setImage(uri);
+      setResult(null);
+      setError("");
+      parseScreenshot(uri);
     }
   };
 
-  const parseScreenshot = () => {
+  const parseScreenshot = async (uri: string) => {
     setParsing(true);
-    // TODO: Phase 10 - AI integration
-    setTimeout(() => {
-      setParsing(false);
-      setResult({
-        items: [
-          { name: "Mie Ayam Spesial", price: 18000, quantity: 1 },
-          { name: "Es Jeruk", price: 6000, quantity: 2 },
-          { name: "Kerupuk", price: 3000, quantity: 1 },
-        ],
-        subtotal: 33000,
-        discount: 3000,
-        shipping: 5000,
-        total: 35000,
-        platform: "shopee",
+    try {
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
       });
-    }, 2000);
+      const parsed = await scanReceipt(base64);
+      setResult(parsed);
+    } catch (e: any) {
+      setError(e.message || "Gagal parse screenshot. Coba lagi.");
+    } finally {
+      setParsing(false);
+    }
   };
 
   const handleSave = async () => {
     if (!result) return;
 
-    const receiptId = await createReceipt.mutateAsync({
-      group_id: groupId!,
-      source: "screenshot",
-      platform: result.platform || "lainnya",
-      subtotal: result.subtotal,
-      discount: result.discount,
-      shipping: result.shipping,
-      total: result.total,
-      status: "draft",
-    });
-
-    for (const item of result.items) {
-      await createItem.mutateAsync({
-        receipt_id: receiptId,
-        name: item.name,
-        price: item.price,
-        quantity: item.quantity,
-        participants: [],
+    try {
+      const receiptId = await createReceipt.mutateAsync({
+        group_id: groupId!,
+        source: "screenshot",
+        platform: (result.platform as any) || "lainnya",
+        subtotal: result.subtotal,
+        discount: result.discount,
+        shipping: result.shipping,
+        total: result.total,
+        status: "draft",
       });
-    }
 
-    router.replace(`/group/${groupId}/receipt/edit?id=${receiptId}`);
+      for (const item of result.items) {
+        await createItem.mutateAsync({
+          receipt_id: receiptId,
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity,
+          participants: [],
+        });
+      }
+
+      router.replace(`/group/${groupId}/receipt/edit?id=${receiptId}`);
+    } catch (e) {
+      setError("Gagal menyimpan struk");
+    }
   };
 
   return (
@@ -98,7 +103,8 @@ export default function ScreenshotReceiptScreen() {
               <Image source={{ uri: image }} style={styles.previewImage} resizeMode="contain" />
               {parsing && (
                 <View style={styles.parsingOverlay}>
-                  <Text style={styles.parsingText}>Membaca screenshot...</Text>
+                  <Text style={styles.parsingEmoji}>🔍</Text>
+                  <Text style={styles.parsingText}>AI membaca screenshot...</Text>
                 </View>
               )}
             </Card>
@@ -112,6 +118,12 @@ export default function ScreenshotReceiptScreen() {
             </Pressable>
           )}
 
+          {error ? (
+            <Card variant="default" style={styles.errorCard}>
+              <Text style={styles.errorText}>{error}</Text>
+            </Card>
+          ) : null}
+
           {!image && (
             <Button
               title="Pilih dari Gallery"
@@ -121,53 +133,90 @@ export default function ScreenshotReceiptScreen() {
               fullWidth
             />
           )}
+
+          {image && !parsing && (
+            <Button
+              title="Pilih Ulang"
+              onPress={() => {
+                setImage(null);
+                setResult(null);
+                setError("");
+              }}
+              variant="secondary"
+              fullWidth
+            />
+          )}
         </View>
       ) : (
         <View style={styles.resultArea}>
           <Card variant="elevated" style={styles.resultCard}>
-            <Text style={styles.resultTitle}>Hasil Parse</Text>
-            {result.items.map((item: any, i: number) => (
+            <View style={styles.resultHeader}>
+              <Text style={styles.resultTitle}>Hasil Parse</Text>
+              <Badge
+                label={result.platform}
+                variant="info"
+              />
+            </View>
+
+            {result.items.map((item, i) => (
               <View key={i} style={styles.resultItem}>
-                <Text style={styles.resultItemName}>{item.name}</Text>
-                <Text style={styles.resultItemQty}>x{item.quantity}</Text>
+                <View style={styles.resultItemInfo}>
+                  <Text style={styles.resultItemName}>{item.name}</Text>
+                  <Text style={styles.resultItemQty}>x{item.quantity}</Text>
+                </View>
                 <Text style={styles.resultItemPrice}>
-                  Rp{(item.price * item.quantity).toLocaleString("id-ID")}
+                  {formatCurrency(item.price * item.quantity)}
                 </Text>
               </View>
             ))}
+
             {result.discount > 0 && (
               <View style={styles.resultRow}>
                 <Text style={styles.resultRowLabel}>Diskon</Text>
-                <Text style={styles.resultRowValueDiscount}>
-                  -Rp{result.discount.toLocaleString("id-ID")}
+                <Text style={styles.resultRowDiscount}>
+                  -{formatCurrency(result.discount)}
                 </Text>
               </View>
             )}
+
             {result.shipping > 0 && (
               <View style={styles.resultRow}>
                 <Text style={styles.resultRowLabel}>Ongkir</Text>
                 <Text style={styles.resultRowValue}>
-                  Rp{result.shipping.toLocaleString("id-ID")}
+                  {formatCurrency(result.shipping)}
                 </Text>
               </View>
             )}
+
             <View style={styles.resultDivider} />
             <View style={styles.resultTotal}>
               <Text style={styles.resultTotalLabel}>Total</Text>
               <Text style={styles.resultTotalValue}>
-                Rp{result.total.toLocaleString("id-ID")}
+                {formatCurrency(result.total)}
               </Text>
             </View>
           </Card>
 
-          <Button
-            title="Simpan & Pilih Peserta"
-            onPress={handleSave}
-            variant="primary"
-            size="lg"
-            fullWidth
-            loading={createReceipt.isPending}
-          />
+          <View style={styles.resultActions}>
+            <Button
+              title="Scan Ulang"
+              onPress={() => {
+                setImage(null);
+                setResult(null);
+                setError("");
+              }}
+              variant="secondary"
+              fullWidth
+            />
+            <Button
+              title="Simpan & Pilih Peserta"
+              onPress={handleSave}
+              variant="primary"
+              size="lg"
+              fullWidth
+              loading={createReceipt.isPending}
+            />
+          </View>
         </View>
       )}
     </View>
@@ -215,7 +264,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 32,
-    gap: 24,
+    gap: 20,
   },
   uploadPlaceholder: {
     alignItems: "center",
@@ -245,14 +294,28 @@ const styles = StyleSheet.create({
   },
   parsingOverlay: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: "rgba(255,255,255,0.85)",
+    backgroundColor: "rgba(255,255,255,0.9)",
     alignItems: "center",
     justifyContent: "center",
+    gap: 8,
+  },
+  parsingEmoji: {
+    fontSize: 36,
   },
   parsingText: {
     fontFamily: "Caveat-SemiBold",
     fontSize: 20,
     color: colors.blue,
+  },
+  errorCard: {
+    backgroundColor: "#fee2e2",
+    borderColor: "#fecaca",
+  },
+  errorText: {
+    fontFamily: "Caveat-Regular",
+    fontSize: 16,
+    color: "#991b1b",
+    textAlign: "center",
   },
   resultArea: {
     flex: 1,
@@ -260,30 +323,40 @@ const styles = StyleSheet.create({
     paddingTop: 20,
   },
   resultCard: {
-    marginBottom: 24,
+    marginBottom: 20,
+  },
+  resultHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
   },
   resultTitle: {
     fontFamily: "Caveat-Bold",
     fontSize: 22,
     color: colors.ink,
-    marginBottom: 12,
   },
   resultItem: {
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
     paddingVertical: 8,
   },
-  resultItemName: {
+  resultItemInfo: {
     flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  resultItemName: {
     fontFamily: "Caveat-SemiBold",
     fontSize: 18,
     color: colors.ink,
   },
   resultItemQty: {
     fontFamily: "Caveat-Regular",
-    fontSize: 16,
+    fontSize: 15,
     color: colors.inkFaint,
-    marginRight: 12,
   },
   resultItemPrice: {
     fontFamily: "Caveat-SemiBold",
@@ -306,7 +379,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.ink,
   },
-  resultRowValueDiscount: {
+  resultRowDiscount: {
     fontFamily: "Caveat-SemiBold",
     fontSize: 16,
     color: colors.green,
@@ -330,5 +403,8 @@ const styles = StyleSheet.create({
     fontFamily: "Caveat-Bold",
     fontSize: 24,
     color: colors.blue,
+  },
+  resultActions: {
+    gap: 10,
   },
 });
