@@ -128,6 +128,20 @@ export function useDeleteReceipt() {
   });
 }
 
+export function useUpdateReceiptStatus() {
+  const database = useSQLiteContext();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      db.updateReceiptStatus(database, id, status),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["receipts"] });
+      queryClient.invalidateQueries({ queryKey: ["receipt"] });
+    },
+  });
+}
+
 // ── Receipt Items ──
 
 export function useReceiptItems(receiptId: string) {

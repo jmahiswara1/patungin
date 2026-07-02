@@ -1,11 +1,11 @@
 import React from "react";
-import { View, StyleSheet, ViewStyle } from "react-native";
+import { View, StyleSheet, ViewStyle, StyleProp } from "react-native";
 import { colors } from "@/lib/theme";
 
 interface CardProps {
   children: React.ReactNode;
   variant?: "default" | "outlined" | "elevated";
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
   padding?: number;
 }
 
@@ -19,8 +19,8 @@ export function Card({
     <View
       style={[
         styles.base,
-        variant === "outlined" && styles.outlined,
-        variant === "elevated" && styles.elevated,
+        variant === "outlined" ? styles.outlined : null,
+        variant === "elevated" ? styles.elevated : null,
         { padding },
         style,
       ]}
